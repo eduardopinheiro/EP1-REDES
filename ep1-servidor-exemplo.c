@@ -43,6 +43,54 @@
 #define LISTENQ 1
 #define MAXDATASIZE 100
 #define MAXLINE 4096
+#define MAXWORDS 10
+
+#define TRUE 1
+#define FALSE 0
+
+typedef int boolean;
+
+
+boolean login(char *username, char *password) {
+    /* Usuários */
+    char user1[] = "carlos";
+    char pass1[] = "pass";
+    char user2[] = "joao";
+    char pass2[] = "1q";
+
+    if (!strcmp(username, user1) && !strcmp(password, pass1))
+      return TRUE;
+
+    if (!strcmp(username, user2) && !strcmp(password, pass2))
+      return TRUE;
+
+    return FALSE;
+}
+
+void read_message(char *input, char *arguments[])
+{
+  char *text, *token;
+  int i;
+
+  text = (char *) malloc(sizeof(char) * 100);
+  token = (char *) malloc(sizeof(char) * 100);
+
+  text = input;
+
+  i = 0;
+  while ((token  = strsep(&text, " ")) != NULL) {
+    if (i >= MAXWORDS) {
+      printf("Error ! Too many arguments\n");
+    } else {
+      arguments[i] = token;
+      i++;
+    }
+  }
+  arguments[i-1] = strtok(arguments[i-1], "\r\n");
+
+  free(text);
+  free(token);
+}
 
 int main (int argc, char **argv) {
    /* Os sockets. Um que será o socket que vai escutar pelas conexões
@@ -155,13 +203,40 @@ int main (int argc, char **argv) {
          /* TODO: É esta parte do código que terá que ser modificada
           * para que este servidor consiga interpretar comandos IMAP  */
          while ((n=read(connfd, recvline, MAXLINE)) > 0) {
+            int i;
+            char *words[MAXWORDS];
+            boolean response;
+            for(i = 0; i < MAXWORDS; i++) words[i] = NULL;
             recvline[n]=0;
-            printf("[Cliente conectado no processo filho %d enviou:] ",getpid());
-            if ((fputs(recvline,stdout)) == EOF) {
-               perror("fputs :( \n");
-               exit(6);
+            read_message(recvline, words);
+            if (!strcmp(words[1], "LOGIN")) {
+                //printf("%s %s\n", words[2], words[3]);
+                strcpy(recvline, words[0]);
+                response = login(words[2], words[3]);
+                if (response == TRUE) {
+                  strcat(recvline, " OK - login completed, now in authenticated state\n");
+                  write(connfd, recvline, strlen(recvline));
+                } else{
+                  strcat(recvline, " NO - login failure: user name or password rejected\n");
+                  write(connfd, recvline, strlen(recvline));
+                  break;
+                }
+            } else if (!strcmp(words[1], "LIST")) {
+              /* TO DO */
+            } else if (!strcmp(words[1], "LOGOUT")) {
+                  strcat(recvline, " OK - logout completed\n");
+                  write(connfd, recvline, strlen(recvline));
+                  break;
+            } else {
+                strcpy(recvline, " BAD - command unknown or arguments invalid\n");
             }
-            write(connfd, recvline, strlen(recvline));
+
+            //printf("[Cliente conectado no processo filho %d enviou:] ",getpid());
+            //if ((fputs(recvline,stdout)) == EOF) {
+            //   perror("fputs :( \n");
+            //   exit(6);
+            //}
+            //write(connfd, recvline, strlen(recvline));
          }
          /* ========================================================= */
          /* ========================================================= */
