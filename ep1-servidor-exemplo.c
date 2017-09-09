@@ -40,6 +40,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <dirent.h>
+
 #define LISTENQ 1
 #define MAXDATASIZE 100
 #define MAXLINE 4096
@@ -55,11 +57,68 @@
 
 typedef int boolean;
 
+boolean isUnread(char *filename) {
+  if(strstr(filename, "\\Seen") != NULL) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+
+int email_count(char *user, int *unread_count) {
+  char *dir = (char*) malloc(sizeof(char) * MAXLINE+1);
+  char cwd[1024];
+  int email_count = 0;
+  *unread_count = 0;
+  DIR *dirp;
+  struct dirent *entry;
+
+  getcwd(cwd, sizeof(cwd));
+  strcat(dir, cwd);
+  strcat(dir, "/home/");
+  strcat(dir, user);
+  strcat(dir, "/Maildir/cur");
+
+  dirp = opendir(dir);
+  while ((entry = readdir(dirp)) != NULL) {
+    if (entry->d_type == DT_REG) {
+      email_count++;
+
+      if (isUnread(entry->d_name) == TRUE) {
+        *unread_count = *unread_count + 1;
+       }
+    }
+  }
+  closedir(dirp);
+  return email_count;
+}
+
+void remove_char(char *s) {
+  char ch = '"';
+  char *p = s;
+  int i; 
+  while (*s) {
+    if (*s != ch)
+        *p++ = *s;
+    s++;
+  }
+  *p = 0;
+}
+
+void getUser(char *s) {
+  int i;
+  for (i = 0; i < strlen(s); i++) {
+    if (s[i] == '@') {
+      s[i] = 0;
+      break;
+    }
+  }
+}
 
 boolean login(char *username, char *password) {
     /* Usuários */
-    char user1[] = "carlos@127.0.0.1";
-    char pass1[] = "pass";
+    char user1[] = "\"carlos@127.0.0.1\"";
+    char pass1[] = "\"pass\"";
     char user2[] = "joao";
     char pass2[] = "1q";
 
@@ -72,43 +131,36 @@ boolean login(char *username, char *password) {
     return FALSE;
 }
 
-int read_message(char *input, char *arguments[], int type)
+int read_lines(char *input, char *arguments[])
 {
   char *text, *token;
-  int i, j, k, size;
-  char tk;
-
-  if (type == LINEBREAK) {
-    tk = '\n';
-  } else {
-    tk = ' ';
-  }
-
+  int k = 0;
   text = (char *) malloc(sizeof(char) * MAXLINE + 1);
-  text = input;
-  size = strlen(text);
+  token = (char *) malloc(sizeof(char) * MAXLINE + 1);
+  strcpy(text, input);
 
-  token = (char *) malloc(sizeof(char) * MAXLINES + 1);
-  j = 0;
-  k = 0;
-  for (i = 0; i < size; i++) {
-    if (text[i] != tk) {
-      if (text[i] == '"') continue;
-      token[j] = text[i];
-      j++;
-    } else {
-      if (j == 0) continue;
-      token[j] = 0;
-      strcpy(arguments[k], token);
-      k++;
-      j = 0;
-      token = (char *) malloc(sizeof(char) * MAXLINES + 1);
-    }
+  token = strtok(text, "\r\n");
+
+  while (token != NULL) {
+    strcpy(arguments[k++], token);
+    token = strtok(NULL, "\r\n");
   }
-  if (j) {
-      token[j-1] = 0;
-      strcpy(arguments[k], token);
-      k++;
+  return k;
+}
+
+int read_command(char *input, char *arguments[])
+{
+  char *text, *token;
+  int k = 0;
+  text = (char *) malloc(sizeof(char) * MAXLINE + 1);
+  token = (char *) malloc(sizeof(char) * MAXLINE + 1);
+  strcpy(text, input);
+
+  token = strtok(text, " ");
+
+  while (token != NULL) {
+    strcpy(arguments[k++], token);
+    token = strtok(NULL, " ");
   }
   return k;
 }
@@ -223,62 +275,121 @@ int main (int argc, char **argv) {
          strcpy(senvline, "");
 
          /* ========================================================= */
-         /* ========================================================= */
+         /* ========================================================= *
          /*                         EP1 INÍCIO                        */
          /* ========================================================= */
          /* ========================================================= */
          /* TODO: É esta parte do código que terá que ser modificada
           * para que este servidor consiga interpretar comandos IMAP  */
+          char *user;
+          user = (char *) malloc(sizeof(char) * MAXLINE + 1);
+
          while ((n=read(connfd, recvline, MAXLINE)) > 0) {
             int i, k, count;
             char **lines;
             char **words;
-            char messages[MAXLINE+1];
+            char messages[MAXLINE * 10];
             boolean response;
 
-
-            lines = (char **) malloc (sizeof(char*) * MAXLINES);
-            words = (char **) malloc (sizeof(char*) * MAXWORDS); 
+            lines = (char **) malloc(sizeof(char*) * MAXLINES);
+            words = (char **) malloc(sizeof(char*) * MAXWORDS);
             recvline[n]=0;
 
             for(k = 0; k < MAXLINES; k++) lines[k] = (char *) malloc (sizeof(char) * MAXLINE);
 
-            count = read_message(recvline, lines, LINEBREAK);
+            count = read_lines(recvline, lines);
 
             for (i = 0; i < count; i++) {
 
               for(k = 0; k < MAXWORDS; k++) words[k] = (char *) malloc (sizeof(char) * MAXLINE);
-              read_message(lines[i], words, WORDBREAK);
+              read_command(lines[i], words);
               strcpy(senvline, words[0]);
+              printf("%s\n", lines[i]);
 
               if (!strcmp(words[1], "CAPABILITY")) {
                     strcpy(messages, "* CAPABILITY IMAP4rev1 AUTH=PLAIN\n");
                     write(connfd, messages, strlen(messages));
                     strcat(senvline, " OK - capability completed\n");
                     write(connfd, senvline, strlen(senvline));
-              } else if (!strcmp(words[1], "STARTTLS")) {
-                    strcat(senvline, " OK Begin TLS negotiation now\n");
-                    write(connfd, senvline, strlen(senvline));
-                    strcpy(messages, "<TLS negotiation, further commands are under [TLS] layer>\n");
-                    write(connfd, messages, strlen(messages));
               } else if (!strcmp(words[1], "login")) {
                   response = login(words[2], words[3]);
                   if (response == TRUE) {
                     strcat(senvline, " OK - login completed, now in authenticated state\n");
                     write(connfd, senvline, strlen(senvline));
+                    strcpy(user, words[2]);
+                    remove_char(user);
+                    getUser(user);
                   } else{
                     strcat(senvline, " NO - login failure: user name or password rejected\n");
                     write(connfd, senvline, strlen(senvline));
                     break;
                   }
-              } else if (!strcmp(words[1], "LIST")) {
-                /* TO DO */
-              } else if (!strcmp(words[1], "LOGOUT")) {
-                    strcpy(messages, "* BYE IMAP4rev1 Server logging out\n");
-                    write(connfd, messages, strlen(messages));
-                    strcat(senvline, " OK - logout completed\n");
-                    write(connfd, senvline, strlen(senvline));
-                    break;
+              } else if (!strcmp(words[1], "list")) {
+                if (!strcmp(words[2], "")) {
+                  strcpy(messages, "* LIST (\\Noselect) \"/\" \"\"\n");
+                  write(connfd, messages, strlen(messages));
+                }
+
+                strcat(senvline, " OK - list completed\n");
+                write(connfd, senvline, strlen(senvline));
+              } else if (!strcmp(words[1], "select")) {
+                int e_count, unread_count;
+                char ecount[12], uncount[12];
+                if (!strcmp(words[2], "\"INBOX\"")) {
+                  e_count = email_count(user, &unread_count);
+                  sprintf(ecount, "%d", e_count);
+                  sprintf(uncount, "%d", unread_count);
+
+                  strcpy(messages, "* FLAGS (\\(\\Answered \\Flagged \\Draft \\Deleted \\Seen NonJunk Junk $NotJunk $Junk $Forwarded)\n");
+                  write(connfd, messages, strlen(messages));
+
+                  strcpy(messages, "* ");
+                  strcat(messages, ecount);
+                  strcat(messages, " EXISTS\n");
+                  write(connfd, messages, strlen(messages));
+
+                  strcpy(messages, "* ");
+                  strcat(messages, uncount);
+                  strcat(messages, " RECENT\n");
+                  write(connfd, messages, strlen(messages));
+
+                  strcpy(messages, "* OK [NOMODSEQ] Sorry, modsequences have not been enabled on this mailbox\n");
+                  write(connfd, messages, strlen(messages));
+
+                  strcat(senvline, " OK - list completed\n");
+                  write(connfd, senvline, strlen(senvline));
+                } else {
+                  strcat(senvline, " NO - list failure: can't list that reference or name\n");
+                  write(connfd, senvline, strlen(senvline));
+                }
+              } else if (!strcmp(words[1], "UID")) {
+                  /* TODO */
+                  if (!strcmp(words[2], "fetch")) {
+                      if (!strcmp(words[3], "10")) {
+                        printf("Here\n");
+                        strcpy(messages, "* 1 FETCH (UID 10 RFC822.SIZE 10000 RFC822.HEADER [Date: Wed, 19 Jan 2011 12:20:16 +0100 (CET)\nFrom: \"test2\" <test2@domain.com>\nTo: test@dest.com\nSubject: Caratteri cinesi] FLAGS (\\Seen))\n");
+                        write(connfd, messages, strlen(messages));
+                      } else {
+                        strcpy(messages, "* 1 FETCH (FLAGS (\\Seen) UID 10)\n");
+                        write(connfd, messages, strlen(messages));
+                        //strcpy(messages, "* 2 FETCH (FLAGS (\\Seen) UID 20)\n");
+                        //write(connfd, messages, strlen(messages));
+                        //strcpy(messages, "* 3 FETCH (FLAGS (\\Seen) UID 30)\n");
+                        //write(connfd, messages, strlen(messages));
+                      }
+
+                      strcat(senvline, " OK - UID command completed\n");
+                      write(connfd, senvline, strlen(senvline));
+                  } else {
+                      strcat(senvline, " NO - UID command error\n");
+                      write(connfd, senvline, strlen(senvline));
+                  }
+              } else if (!strcmp(words[1], "logout")) {
+                  strcpy(messages, "* BYE IMAP4rev1 Server logging out\n");
+                  write(connfd, messages, strlen(messages));
+                  strcat(senvline, " OK - logout completed\n");
+                  write(connfd, senvline, strlen(senvline));
+                  break;
               } else {
                   strcpy(senvline, " BAD - command unknown or arguments invalid\n");
                   write(connfd, senvline, strlen(senvline));
