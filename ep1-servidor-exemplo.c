@@ -43,17 +43,22 @@
 #define LISTENQ 1
 #define MAXDATASIZE 100
 #define MAXLINE 4096
+
 #define MAXWORDS 10
+#define MAXLINES 10
 
 #define TRUE 1
 #define FALSE 0
+
+#define LINEBREAK 10
+#define WORDBREAK 20
 
 typedef int boolean;
 
 
 boolean login(char *username, char *password) {
     /* Usuários */
-    char user1[] = "carlos";
+    char user1[] = "carlos@127.0.0.1";
     char pass1[] = "pass";
     char user2[] = "joao";
     char pass2[] = "1q";
@@ -67,29 +72,45 @@ boolean login(char *username, char *password) {
     return FALSE;
 }
 
-void read_message(char *input, char *arguments[])
+int read_message(char *input, char *arguments[], int type)
 {
   char *text, *token;
-  int i;
+  int i, j, k, size;
+  char tk;
 
-  text = (char *) malloc(sizeof(char) * 100);
-  token = (char *) malloc(sizeof(char) * 100);
+  if (type == LINEBREAK) {
+    tk = '\n';
+  } else {
+    tk = ' ';
+  }
 
+  text = (char *) malloc(sizeof(char) * MAXLINE + 1);
   text = input;
+  size = strlen(text);
 
-  i = 0;
-  while ((token  = strsep(&text, " ")) != NULL) {
-    if (i >= MAXWORDS) {
-      printf("Error ! Too many arguments\n");
+  token = (char *) malloc(sizeof(char) * MAXLINES + 1);
+  j = 0;
+  k = 0;
+  for (i = 0; i < size; i++) {
+    if (text[i] != tk) {
+      if (text[i] == '"') continue;
+      token[j] = text[i];
+      j++;
     } else {
-      arguments[i] = token;
-      i++;
+      if (j == 0) continue;
+      token[j] = 0;
+      strcpy(arguments[k], token);
+      k++;
+      j = 0;
+      token = (char *) malloc(sizeof(char) * MAXLINES + 1);
     }
   }
-  arguments[i-1] = strtok(arguments[i-1], "\r\n");
-
-  free(text);
-  free(token);
+  if (j) {
+      token[j-1] = 0;
+      strcpy(arguments[k], token);
+      k++;
+  }
+  return k;
 }
 
 int main (int argc, char **argv) {
@@ -103,6 +124,9 @@ int main (int argc, char **argv) {
    pid_t childpid;
    /* Armazena linhas recebidas do cliente */
     char    recvline[MAXLINE + 1];
+
+   /* Armazwna linhas enviadas ao cliente */
+    char senvline[MAXLINE + 1];
    /* Armazena o tamanho da string lida do cliente */
    ssize_t  n;
    
@@ -194,6 +218,9 @@ int main (int argc, char **argv) {
           * enviar uma resposta para o cliente (Que precisará estar
           * esperando por esta resposta) 
           */
+         strcpy(senvline, "* OK [CAPABILITY IMAP4]\n");
+         write(connfd, senvline, strlen(senvline));
+         strcpy(senvline, "");
 
          /* ========================================================= */
          /* ========================================================= */
@@ -203,40 +230,63 @@ int main (int argc, char **argv) {
          /* TODO: É esta parte do código que terá que ser modificada
           * para que este servidor consiga interpretar comandos IMAP  */
          while ((n=read(connfd, recvline, MAXLINE)) > 0) {
-            int i;
-            char *words[MAXWORDS];
+            int i, k, count;
+            char **lines;
+            char **words;
+            char messages[MAXLINE+1];
             boolean response;
-            for(i = 0; i < MAXWORDS; i++) words[i] = NULL;
-            recvline[n]=0;
-            read_message(recvline, words);
-            if (!strcmp(words[1], "LOGIN")) {
-                //printf("%s %s\n", words[2], words[3]);
-                strcpy(recvline, words[0]);
-                response = login(words[2], words[3]);
-                if (response == TRUE) {
-                  strcat(recvline, " OK - login completed, now in authenticated state\n");
-                  write(connfd, recvline, strlen(recvline));
-                } else{
-                  strcat(recvline, " NO - login failure: user name or password rejected\n");
-                  write(connfd, recvline, strlen(recvline));
-                  break;
-                }
-            } else if (!strcmp(words[1], "LIST")) {
-              /* TO DO */
-            } else if (!strcmp(words[1], "LOGOUT")) {
-                  strcat(recvline, " OK - logout completed\n");
-                  write(connfd, recvline, strlen(recvline));
-                  break;
-            } else {
-                strcpy(recvline, " BAD - command unknown or arguments invalid\n");
-            }
 
-            //printf("[Cliente conectado no processo filho %d enviou:] ",getpid());
-            //if ((fputs(recvline,stdout)) == EOF) {
-            //   perror("fputs :( \n");
-            //   exit(6);
-            //}
-            //write(connfd, recvline, strlen(recvline));
+
+            lines = (char **) malloc (sizeof(char*) * MAXLINES);
+            words = (char **) malloc (sizeof(char*) * MAXWORDS); 
+            recvline[n]=0;
+
+            for(k = 0; k < MAXLINES; k++) lines[k] = (char *) malloc (sizeof(char) * MAXLINE);
+
+            count = read_message(recvline, lines, LINEBREAK);
+
+            for (i = 0; i < count; i++) {
+
+              for(k = 0; k < MAXWORDS; k++) words[k] = (char *) malloc (sizeof(char) * MAXLINE);
+              read_message(lines[i], words, WORDBREAK);
+              strcpy(senvline, words[0]);
+
+              if (!strcmp(words[1], "CAPABILITY")) {
+                    strcpy(messages, "* CAPABILITY IMAP4rev1 AUTH=PLAIN\n");
+                    write(connfd, messages, strlen(messages));
+                    strcat(senvline, " OK - capability completed\n");
+                    write(connfd, senvline, strlen(senvline));
+              } else if (!strcmp(words[1], "STARTTLS")) {
+                    strcat(senvline, " OK Begin TLS negotiation now\n");
+                    write(connfd, senvline, strlen(senvline));
+                    strcpy(messages, "<TLS negotiation, further commands are under [TLS] layer>\n");
+                    write(connfd, messages, strlen(messages));
+              } else if (!strcmp(words[1], "login")) {
+                  response = login(words[2], words[3]);
+                  if (response == TRUE) {
+                    strcat(senvline, " OK - login completed, now in authenticated state\n");
+                    write(connfd, senvline, strlen(senvline));
+                  } else{
+                    strcat(senvline, " NO - login failure: user name or password rejected\n");
+                    write(connfd, senvline, strlen(senvline));
+                    break;
+                  }
+              } else if (!strcmp(words[1], "LIST")) {
+                /* TO DO */
+              } else if (!strcmp(words[1], "LOGOUT")) {
+                    strcpy(messages, "* BYE IMAP4rev1 Server logging out\n");
+                    write(connfd, messages, strlen(messages));
+                    strcat(senvline, " OK - logout completed\n");
+                    write(connfd, senvline, strlen(senvline));
+                    break;
+              } else {
+                  strcpy(senvline, " BAD - command unknown or arguments invalid\n");
+                  write(connfd, senvline, strlen(senvline));
+                  break;
+              }
+              strcpy(senvline, "");
+            }
+            strcpy(recvline, "");
          }
          /* ========================================================= */
          /* ========================================================= */
